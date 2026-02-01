@@ -6,6 +6,7 @@
 *.npy
 *.pyc
 checkpoints/
+output/
 outputs/
 data/
 __pycache__/
