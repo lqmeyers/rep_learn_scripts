@@ -1,0 +1,10 @@
+filepath_col: "frame_name_full"  # column name for image paths
+text_prompt: "fish."  # Optional text prompt for processing
+sam2_checkpoint: "/home/lmeyers/mango_images/Grounded-SAM-2/checkpoints/sam2.1_hiera_large.pt" # Path to the SAM2 model checkpoint
+model_cfg: "configs/sam2.1/sam2.1_hiera_l.yaml"  # Path to the model configuration file
+coco_json_path: ../ciclid_data/lago_results.json  # Path to COCO JSON file (default: output_dir/nms_boxes_{idx}.json)
+device: cuda  # Device to run the model on (e.g., "cuda", "cpu")
+visualize: false  # Whether to visualize results
+output_dir: "../ciclid_data/"  # Directory to save output files
+save_images: true  # Whether to save processed images
+output_csv: "../ciclid_data/lago_results.csv"  # Path to save the output CSV file
