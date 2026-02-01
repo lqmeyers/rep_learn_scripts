@@ -1,0 +1,13 @@
+*.pt
+*.pth
+*.png
+*.jpg
+*.tiff
+*.npy
+*.pyc
+checkpoints/
+outputs/
+data/
+__pycache__/
+
+
