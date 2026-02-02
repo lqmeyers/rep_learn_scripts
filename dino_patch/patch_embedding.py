@@ -9,6 +9,7 @@ from transformers.image_utils import load_image
 import imageio
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 def load_dinov3_model(model_id="facebook/dinov3-vitb16-pretrain-lvd1689m",device="cuda"):

@@ -64,6 +64,6 @@ if __name__ == "__main__":
     for i in range(0, len(args.query_images), args.batch_size):
         print(f"Processing batch {i // args.batch_size + 1}...","images:", args.query_images[i:i+args.batch_size])
         batch_images = args.query_images[i:i+args.batch_size]
-        save_paths = [os.path.join(args.save_dir, os.path.basename(img) + "_sim_map.png") for img in batch_images]
+        save_paths = [os.path.join(args.save_dir, os.path.basename(img) + "_sim_map.npy") for img in batch_images]
         print("Save paths:", save_paths)
         calc_sim_and_save_batch(batch_images, ref_patch, preprocessor, model, save_paths)
