@@ -1,13 +1,19 @@
 from PIL import Image
 import tqdm
+from transformers import AutoModel, AutoImageProcessor
 from bioclip import TreeOfLifeClassifier, Rank
 import numpy as np
 import pandas as pd
 import os
+import sys
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import matplotlib.pyplot as plt
 import torch
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+sys.path.insert(0, "/home/lmeyers/rep_learn_scripts/dino_patch")
+from patch_embedding import *
+
+
 #df = pd.read_csv("/home/lmeyers/ciclidos/data/combined_ciclid_w_metadata_paths.csv")
 #print(len(df))
 def bioclip_embed_batch(df, image_path_col="local_path", classifier=None, batch_size=32, embedding_col="embedding"):
@@ -72,6 +78,52 @@ def bioclip_embed_batch(df, image_path_col="local_path", classifier=None, batch_
     df["near_edge"] = ((~df["has_x_edge"]) & (~df["horizontal_detection"])) | ((~df["has_y_edge"]) & (df["horizontal_detection"]))
 
     return df
+
+#############################
+# Dino inference
+def dinov3_embed(df, image_path_col="crop_path", model_name="facebook/dinov3-vit7b16-pretrain-lvd1689", batch_size=32, embedding_col="embedding",limited_mem=False):
+   
+    # Check GPU
+    print("CUDA available:", torch.cuda.is_available())
+    num_devices = torch.cuda.device_count()
+    print("Number of CUDA devices:", num_devices)
+    for idx in range(num_devices):
+        print(f"Device {idx}: {torch.cuda.get_device_name(idx)}")
+    
+    preprocessor, model = load_dinov3_model("facebook/dinov3-vit7b16-pretrain-lvd1689m", device='cuda')
+
+    # Prepare paths and output arrays
+    paths = df[image_path_col].tolist()
+    n_samples = len(paths)
+    embedding_dim = model.config.hidden_size if hasattr(model.config, "hidden_size") else 768
+
+   
+   
+    # Preallocate arrays for embeddings
+    embeddings = []
+   
+    # Batch inference
+    for i in tqdm.tqdm(range(0, n_samples, batch_size), desc="Processing batches"):
+        batch_idx = slice(i, min(i + batch_size, n_samples))
+        batch_paths = paths[batch_idx]
+        images = []
+        for path in batch_paths:
+            try:
+                images.append(Image.open(path).convert("RGB"))
+            except Exception as e:
+                print(f"Error loading {path}: {e}")
+                images.append(Image.new("RGB", input_size))
+        inputs = processor(images=images, return_tensors="pt", size=list(input_size)).to(model.device)
+        with torch.inference_mode():
+            outputs = model(**inputs)
+        batch_embeddings = outputs.pooler_output.cpu().numpy()    
+        embeddings.extend(batch_embeddings.tolist())
+        torch.cuda.empty_cache()
+    
+    df[embedding_col] = embeddings
+    return df
+
+
 
 if __name__ == "__main__":
     # Usage example:

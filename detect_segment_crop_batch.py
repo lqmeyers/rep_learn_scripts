@@ -26,7 +26,12 @@ from detect import *
 
 import pandas as pd
 import yaml
+import tqdm
 import os
+import sys
+
+sys.path.insert(0, "/home/lmeyers/rep_learn_scripts/dino_patch")
+from patch_embedding import load_dinov3_model
 
 def extract_masks_from_image_batch(images, masks_batch, scores_batch, box_coords_batch, input_labels_batch=None, borders=True):
     """
@@ -90,6 +95,26 @@ def bioclip_embed_batch(crops_batch, classifier=None):
             embeddings.append(emb)
         embeddings_batch.append(np.array(embeddings))
     return embeddings_batch
+
+####################3
+def Dinov3_predict_batch(crops_batch):
+     
+    preprocessor, model = load_dinov3_model("facebook/dinov3-vit7b16-pretrain-lvd1689m", device='cuda')
+
+    embeddings_batch = []
+    for crops in tqdm.tqdm(crops_batch, desc="Embedding crops with DINOv3", total=len(crops_batch)):
+        batch_embeddings = []
+        for crop in crops:
+            if crop.mode == "RGBA":
+                crop = crop.convert("RGB")
+            inputs = preprocessor(crop, return_tensors="pt").to('cuda')
+            with torch.no_grad():
+                outputs = model(**inputs)
+            embedding = outputs.last_hidden_state[:, 0, :].cpu().numpy().squeeze()
+            batch_embeddings.append(embedding)
+        embeddings_batch.append(np.array(batch_embeddings))
+    return embeddings_batch
+
 
 #################################################### Main Batched Pipeline ########################################################
 def detect_segment_crop_pipeline_batch(

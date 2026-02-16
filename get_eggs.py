@@ -1,8 +1,15 @@
 from detect_segment_crop import *
 from detect_segment_crop_batch import *
+#from embed import *
 import tqdm
 
 # TODO impliment option from dir as well
+from dotenv import load_dotenv
+from huggingface_hub import login, upload_folder #load_dataset
+load_dotenv(".env")  # Loads variables from .env into environment
+hf_token = os.getenv("HF_TOKEN")
+#print(hf_token)
+login(token=hf_token)
 
 def process_csv_with_pipeline(
     input_csv,
@@ -100,10 +107,15 @@ def process_csv_with_pipeline(
                 image = Image.open(img_path).convert("RGB")
                 crops_batch.append([image])  # single crop which is the whole image
 
-        embeddings_batch = bioclip_embed_batch(crops_batch)
+        if config.get("embedding_model", "Bioclip") == "Bioclip":
+            embeddings_batch = bioclip_embed_batch(crops_batch)
+        elif config.get("embedding_model", "Bioclip") == "DINOv3":
+            embeddings_batch = Dinov3_predict_batch(crops_batch)
+        else:
+            raise ValueError(f"Unsupported embedding model: {config.get('embedding_model', None)}")
 
         for idx, (row, crops, embeddings) in enumerate(zip(df.to_dict(orient="records"), crops_batch, embeddings_batch)):
-            for crop_idx, (crop, emb) in tqdm.tqdm(enumerate(zip(crops, embeddings)), total=len(crops),desc=f"Processing image {idx+1}/{len(df)}"): #TODO verbose + tqdm
+            for crop_idx, (crop, emb) in enumerate(zip(crops, embeddings)): #TODO verbose + tqdm
                 crop_filename = f"{crop_prefix}_{idx}_{crop_idx}.png"
                 crop_path = os.path.join(output_dir, crop_filename)
                 if config.get("save_images", True):
