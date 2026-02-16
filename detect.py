@@ -1,6 +1,7 @@
 import sys
 import json
 import cv2
+import tqdm
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -13,7 +14,7 @@ import torchvision.ops as ops
 
 from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
-from transformers import Owlv2ImageProcessor, Owlv2ForObjectDetection
+from transformers import Owlv2Processor, Owlv2ForObjectDetection
 #     import torch
 #     from PIL import Image
 
@@ -184,36 +185,53 @@ def nms_batch(batch_boxes, batch_labels, batch_scores):
         nms_scores_batch.append(nms_scores)
     return nms_boxes_batch, nms_labels_batch, nms_scores_batch
 
-def owl_predict_batch(images, texts):
+def owl_predict_batch(images, texts, batch_size=16):
     """
     Batched prediction of bounding boxes and labels using OWL-ViT.
     Args:
         images (list of str or PIL.Image): List of image paths or PIL Image objects.
         texts (list of str or list): List of text prompts for object detection.
+        batch_size (int): Number of images to process per batch.
     Returns:
         batch_boxes (list of torch.Tensor): Detected bounding boxes per image.
         batch_labels (list of list): Detected labels per image.
         batch_scores (list of torch.Tensor): Detection scores per image.
     """
-    model_id = "google/owlvit-base-patch32"
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    processor = Owlv2ImageProcessor.from_pretrained("google/owlv2-base-patch16-ensemble")
+    processor = Owlv2Processor.from_pretrained("google/owlv2-base-patch16-ensemble")
     model = Owlv2ForObjectDetection.from_pretrained("google/owlv2-base-patch16-ensemble").to(device)
 
     batch_boxes, batch_labels, batch_scores = [], [], []
-    for image, text in zip(images, texts):
-        if isinstance(image, str):
-            image = Image.open(image).convert("RGB")
-        if isinstance(text, str):
-            text = [text]
-        inputs = processor(text=text, images=image, return_tensors="pt").to(device)
+
+    for i in tqdm.tqdm(range(0, len(images), batch_size), desc="Processing detection batches"):
+        batch_images = images[i:i+batch_size]
+        batch_texts = texts[i:i+batch_size]
+        
+        processed_images = []
+        for image in batch_images:
+            if isinstance(image, str):
+                image = Image.open(image).convert("RGB")
+            processed_images.append(image)
+        
+        processed_texts = []
+        for text in batch_texts:
+            if isinstance(text, str):
+                text = [text]
+            processed_texts.append(text)
+        
+        inputs = processor(text=processed_texts, images=processed_images, return_tensors="pt").to(device)
+        
         with torch.no_grad():
             outputs = model(**inputs)
-        target_sizes = torch.tensor([image.size[::-1]])
-        results = processor.post_process_object_detection(outputs, target_sizes=target_sizes, threshold=0.25)
-        batch_boxes.append(results[0]["boxes"])
-        batch_labels.append(results[0]["labels"])
-        batch_scores.append(results[0]["scores"])
+        
+        target_sizes = torch.tensor([img.size[::-1] for img in processed_images])
+        results = processor.post_process_grounded_object_detection(outputs, target_sizes=target_sizes, threshold=0.25)
+        
+        for result in results:
+            batch_boxes.append(result["boxes"])
+            batch_labels.append(result["labels"])
+            batch_scores.append(result["scores"])
+    
     return batch_boxes, batch_labels, batch_scores
 
 #TODO Load models function

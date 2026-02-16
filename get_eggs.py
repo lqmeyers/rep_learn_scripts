@@ -65,7 +65,6 @@ def process_csv_with_pipeline(
             embeddings = bioclip_embed_batch(crops)
 
             # Save crops and prepare output rows
-          
             for crop_idx, (crop, emb) in enumerate(zip(crops, embeddings)):
                 crop_filename = f"{crop_prefix}_{idx}_{crop_idx}.png"
                 crop_path = os.path.join(output_dir, crop_filename)
@@ -86,6 +85,7 @@ def process_csv_with_pipeline(
         device = config.get("device", None)
         visualize = config.get("visualize", False)
 
+        #FIXME Detection model from config
         if config.get("segmentation", True) or config.get("detection", True):
             if verbose:
                 print(f"Running batched detection and segmentation on {len(image_paths)} images...")
@@ -99,6 +99,7 @@ def process_csv_with_pipeline(
                 visualize=visualize,
                 kwargs=config
             )
+            print(f"Found {sum(len(crops) for crops in crops_batch)} total crops across {len(image_paths)} images.")
         else:
             if verbose:
                 print(f"Skipping detection and segmentation, using full images for {len(image_paths)} images...")
@@ -112,17 +113,22 @@ def process_csv_with_pipeline(
         elif config.get("embedding_model", "Bioclip") == "DINOv3":
             embeddings_batch = Dinov3_predict_batch(crops_batch)
         else:
-            raise ValueError(f"Unsupported embedding model: {config.get('embedding_model', None)}")
+            print(f"Unknown embedding model {config.get('embedding_model')}, skipping embedding.")
+            embeddings_batch = [np.array([]) * len(crops) for crops in crops_batch]
 
-        for idx, (row, crops, embeddings) in enumerate(zip(df.to_dict(orient="records"), crops_batch, embeddings_batch)):
+        for idx, (row, crops, embeddings) in tqdm(enumerate(zip(df.to_dict(orient="records"), crops_batch, embeddings_batch)), total=len(df), desc="Saving Crops"):
+            if not embeddings:
+                embeddings = [None] * len(crops)
+
             for crop_idx, (crop, emb) in enumerate(zip(crops, embeddings)): #TODO verbose + tqdm
                 crop_filename = f"{crop_prefix}_{idx}_{crop_idx}.png"
                 crop_path = os.path.join(output_dir, crop_filename)
+                #print(f"Saving crop {crop_idx} for image {idx} to {crop_path}")
                 if config.get("save_images", True):
                     crop.save(crop_path)
                 output_row = row.copy()
                 output_row["crop_path"] = crop_path
-                output_row["embedding"] = emb.tolist()
+                output_row["embedding"] = emb.tolist() if emb is not None else None
                 output_records.append(output_row)
 
     # Write output CSV

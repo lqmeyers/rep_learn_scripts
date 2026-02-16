@@ -76,49 +76,64 @@ def show_masks_with_colormap(image, masks, scores, box_coords=None, borders=True
     plt.show()
 
 ################################ COCO Format IO ############################################3
-
-def save_coco_json(image_path, nms_boxes, nms_labels, nms_scores, output_path):
-    # Get image info
-    image = Image.open(image_path)
-    width, height = image.size
-
+def save_coco_json(image_paths, nms_boxes_list, nms_labels_list, nms_scores_list, output_path):
+    """Save all detections from multiple images to a single COCO JSON file."""
+    
     # Build COCO structure
     coco_dict = {
-        "images": [
-            {
-                "id": 1,
-                "file_name": image_path,
-                "width": width,
-                "height": height
-            }
-        ],
+        "images": [],
         "annotations": [],
         "categories": []
     }
-
-    # Build categories (unique labels)
-    label_to_id = {label: idx+1 for idx, label in enumerate(sorted(set(nms_labels)))}
+    
+    # Collect all unique labels across all images
+    all_labels = []
+    for nms_labels in nms_labels_list:
+        nms_labels = nms_labels if isinstance(nms_labels, (list, tuple)) else [nms_labels]
+        converted_labels = [label.item() if hasattr(label, 'item') else label for label in nms_labels]
+        all_labels.extend(converted_labels)
+    
+    label_to_id = {str(label): idx+1 for idx, label in enumerate(sorted(set(all_labels)))}
     for label, cat_id in label_to_id.items():
         coco_dict["categories"].append({
             "id": cat_id,
             "name": label
         })
-
-    # Add annotations
-    for i, (box, label, score) in enumerate(zip(nms_boxes.cpu().numpy(), nms_labels, nms_scores.cpu().numpy())):
-        x_min, y_min, x_max, y_max = box
-        width_box = x_max - x_min
-        height_box = y_max - y_min
-        coco_dict["annotations"].append({
-            "id": i+1,
-            "image_id": 1,
-            "category_id": label_to_id[label],
-            "bbox": [float(x_min), float(y_min), float(width_box), float(height_box)],
-            "score": float(score),
-            "area": float(width_box * height_box),
-            "iscrowd": 0
+    
+    # Add images and annotations
+    annotation_id = 1
+    for image_id, (image_path, nms_boxes, nms_labels, nms_scores) in enumerate(
+        zip(image_paths, nms_boxes_list, nms_labels_list, nms_scores_list), start=1
+    ):
+        # Add image info
+        image = Image.open(image_path)
+        width, height = image.size
+        coco_dict["images"].append({
+            "id": image_id,
+            "file_name": image_path,
+            "width": width,
+            "height": height
         })
-
+        
+        # Add annotations for this image
+        nms_labels_iterable = nms_labels if isinstance(nms_labels, (list, tuple)) else [nms_labels]
+        converted_labels = [label.item() if hasattr(label, 'item') else label for label in nms_labels_iterable]
+        for box, label, score in zip(nms_boxes.cpu().numpy(), converted_labels, nms_scores.cpu().numpy()):
+            x_min, y_min, x_max, y_max = box
+            width_box = x_max - x_min
+            height_box = y_max - y_min
+            label_str = str(label)
+            coco_dict["annotations"].append({
+                "id": annotation_id,
+                "image_id": image_id,
+                "category_id": label_to_id[label_str],
+                "bbox": [float(x_min), float(y_min), float(width_box), float(height_box)],
+                "score": float(score),
+                "area": float(width_box * height_box),
+                "iscrowd": 0
+            })
+            annotation_id += 1
+    
     # Save to file
     with open(output_path, "w") as f:
         json.dump(coco_dict, f, indent=2)
