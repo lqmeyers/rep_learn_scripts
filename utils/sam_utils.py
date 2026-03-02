@@ -136,14 +136,7 @@ def save_coco_json(image_path, nms_boxes, nms_labels, nms_scores, output_path):
     width, height = image.size
 
     coco_dict = {
-        "images": [
-            {
-                "id": 1,
-                "file_name": image_path,
-                "width": width,
-                "height": height
-            }
-        ],
+        "images": [],
         "annotations": [],
         "categories": []
     }
