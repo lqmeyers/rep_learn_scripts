@@ -25,7 +25,7 @@ from bioclip import TreeOfLifeClassifier
 
 sys.path.insert(0,"../")
 
-from detect import *
+from scripts.detect import *
 from utils.sam_utils import *
 from utils.visualize import *
 

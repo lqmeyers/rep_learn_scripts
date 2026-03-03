@@ -28,10 +28,10 @@ from bioclip import TreeOfLifeClassifier
 sys.path.insert(0, "../")
 from utils.sam_utils import *
 from utils.visualize import *
-from detect import *
-from segment import *
-from crop import * 
-from embed import *
+from scripts.detect import *
+from scripts.segment import *
+from scripts.crop import * 
+from scripts.embed import *
 from dino_patch.patch_embedding import load_dinov3_model
 
 #################################################### Main Batched Pipeline ########################################################
@@ -74,7 +74,7 @@ def detect_segment_crop_pipeline_batch(
 
     # Step 1: Detect objects (batched)
     if kwargs.get("detection", True):
-        batch_boxes, batch_labels, batch_scores = gdino_predict_batch(image_paths, text_prompts)
+        batch_boxes, batch_labels, batch_scores = owl_predict_batch(image_paths, text_prompts)
         nms_boxes_batch, nms_labels_batch, nms_scores_batch = nms_batch(batch_boxes, batch_labels, batch_scores)
     else:
         # Use whole image as a single box
@@ -103,7 +103,7 @@ def detect_segment_crop_pipeline_batch(
     all_label_logits_batch = []
     if kwargs.get("segmentation", True):
         all_labels_masks_squeezed, all_labels_scores, all_label_logits = batch_segmentation(
-            image_paths, nms_boxes_batch, nms_labels_batch, nms_scores_batch
+            image_paths,nms_boxes_batch, model_cfg, sam2_checkpoint, device=device
         )
         all_label_masks_batch = all_labels_masks_squeezed
         all_label_scores_batch = all_labels_scores

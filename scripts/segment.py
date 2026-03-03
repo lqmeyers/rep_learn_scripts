@@ -62,7 +62,8 @@ def batch_segmentation(image_paths, nms_boxes_batch, model_cfg, sam2_checkpoint,
         all_logits.append(logits)
 
     # Stack results for the batch
-    all_masks = np.stack(all_masks)
-    all_scores = np.stack(all_scores)
-    all_logits = np.stack(all_logits)
+    if len(all_masks) > 0:
+        all_masks = np.stack(all_masks)
+        all_scores = np.stack(all_scores)
+        all_logits = np.stack(all_logits)
     return all_masks, all_scores, all_logits
