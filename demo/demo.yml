@@ -1,0 +1,18 @@
+filepath_col: "file_name"  # column name for image paths
+filepath_prefix: "demo/irises_demo/"  # prefix to add to image paths
+detection: False  # Whether to perform object detection
+detection_model:  #"IDEA-Research/grounding-dino-tiny"
+coco_json_path:   # Path to COCO JSON file (default: output_dir/nms_boxes_{idx}.json)
+text_prompt: "flower."  # Optional text prompt for processing
+segmentation: False  # Whether to perform segmentation
+sam2_checkpoint: "./checkpoints/sam2.1_hiera_large.pt" # Path to the SAM2 model checkpoint
+sam2_model_cfg: "configs/sam2.1/sam2.1_hiera_l.yaml"  # Path to the model configuration file
+device: cuda:2  # Device to run the model on (e.g., "cuda", "cpu")
+embed: True  # Whether to compute embeddings
+embedding_model: "Bioclip"  # Embedding model to use
+batch_size: 4  # Batch size for processing
+visualize: False # Whether to visualize results
+output_dir: "demo/demo_output/"  # Directory to save output files
+save_images: False  # Whether to save processed images
+output_csv: "results.csv"  # Path to save the output CSV file
+  
