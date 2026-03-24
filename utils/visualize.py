@@ -74,3 +74,14 @@ def plot_predicted_masks_overlay(image, all_label_masks_squeezed, all_labels_sco
     plt.axis('off')
     plt.title(title)
     plt.show()
+
+def get_box_centers(boxes):
+    """
+    Get the centers of bounding boxes.
+    Args:
+        boxes (torch.Tensor): Tensor of shape (num_boxes, 4) containing bounding box coordinates [x_min, y_min, x_max, y_max].
+    Returns:
+        np.ndarray: Array of shape (num_boxes, 2) containing the centers of the bounding boxes.
+    """
+    box_centers = np.array([[(x_min + x_max) / 2, (y_min + y_max) / 2] for x_min, y_min, x_max, y_max in boxes.cpu().numpy()])
+    return box_centers

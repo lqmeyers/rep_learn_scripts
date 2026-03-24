@@ -10,13 +10,79 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import matplotlib.pyplot as plt
 import torch
 
-sys.path.insert(0, "/home/lmeyers/rep_learn_scripts/dino_patch")
-from patch_embedding import *
+sys.path.insert(0, "../")
+from dino_patch.patch_embedding import *
+
+############################################################ Main Embedding Functions ########################################################
+def bioclip_embed_batch(crops_batch, classifier=None):
+    """
+    Batched embedding of crops using BioCLIP.
+    Args:
+        crops_batch (list of list of PIL.Image)
+        classifier (TreeOfLifeClassifier, optional)
+    Returns:
+        embeddings_batch (list of np.ndarray)
+    """
+    if classifier is None:
+        classifier = TreeOfLifeClassifier()
+    embeddings_batch = []
+    for crops in crops_batch:
+        embeddings = []
+        for crop in crops:
+            if crop.mode == "RGBA":
+                crop = crop.convert("RGB")
+            emb = classifier.create_image_features([crop]).cpu().numpy().squeeze()
+            embeddings.append(emb)
+        embeddings_batch.append(np.array(embeddings))
+    return embeddings_batch
+
+####################3
+def Dinov3_predict_batch(crops_batch):
+     
+    preprocessor, model = load_dinov3_model("facebook/dinov3-vit7b16-pretrain-lvd1689m", device='cuda')
+
+    embeddings_batch = []
+    for crops in tqdm.tqdm(crops_batch, desc="Embedding crops with DINOv3", total=len(crops_batch)):
+        batch_embeddings = []
+        for crop in crops:
+            if crop.mode == "RGBA":
+                crop = crop.convert("RGB")
+            inputs = preprocessor(crop, return_tensors="pt").to('cuda')
+            with torch.no_grad():
+                outputs = model(**inputs)
+            embedding = outputs.last_hidden_state[:, 0, :].cpu().numpy().squeeze()
+            batch_embeddings.append(embedding)
+        embeddings_batch.append(np.array(batch_embeddings))
+    return embeddings_batch
 
 
-#df = pd.read_csv("/home/lmeyers/ciclidos/data/combined_ciclid_w_metadata_paths.csv")
-#print(len(df))
-def bioclip_embed_batch(df, image_path_col="local_path", classifier=None, batch_size=32, embedding_col="embedding"):
+############################################ BioCLIP Embedding Function ############################################
+def bioclip_embed(crops, classifier=None):
+    """
+    Embed crops using BioCLIP.
+
+    Args:
+        crops (list of PIL.Image): List of cropped images to embed.
+        classifier (TreeOfLifeClassifier, optional): Pre-initialized BioCLIP classifier.
+
+    Returns:
+        embeddings (np.ndarray): Array of embeddings for each crop.
+    """
+    if classifier is None:
+        classifier = TreeOfLifeClassifier()
+
+    embeddings = []
+    for crop in crops:
+        # Convert RGBA crop to RGB before embedding
+        if crop.mode == "RGBA":
+            crop = crop.convert("RGB")
+        emb = classifier.create_image_features([crop]).cpu().numpy().squeeze()
+        embeddings.append(emb)
+
+    return np.array(embeddings)
+
+
+def bioclip_embed_batch_from_df(df, image_path_col="local_path", classifier=None, batch_size=32, embedding_col="embedding"):
     """
     Batch embed images using BioCLIP and add embeddings as a list to the dataframe.
 
@@ -81,7 +147,7 @@ def bioclip_embed_batch(df, image_path_col="local_path", classifier=None, batch_
 
 #############################
 # Dino inference
-def dinov3_embed(df, image_path_col="crop_path", model_name="facebook/dinov3-vit7b16-pretrain-lvd1689", batch_size=32, embedding_col="embedding",limited_mem=False):
+def dinov3_embed_from_df(df, image_path_col="crop_path", model_name="facebook/dinov3-vit7b16-pretrain-lvd1689", batch_size=32, embedding_col="embedding",limited_mem=False):
    
     # Check GPU
     print("CUDA available:", torch.cuda.is_available())
@@ -129,6 +195,6 @@ if __name__ == "__main__":
     # Usage example:
     df_path = "/home/lmeyers/GH010037/detections.csv"
     dfm = pd.read_csv(df_path)
-    dfcm = batch_bioclip_embed(dfm, image_path_col="crop_path",batch_size=64)
+    dfcm = bioclip_embed_batch_from_df(dfm, image_path_col="crop_path",batch_size=64)
     outpath = os.path.join(os.path.dirname(df_path),os.path.basename(df_path)[:-4] + "_with_all_embeddings.csv")
     dfcm.to_csv(outpath, index=False)

@@ -1,8 +1,16 @@
+######################################################
+# Zero Shot Object Detection with Grounding DINO and OWL-ViT
+# This script implements a detection pipeline using either Grounding DINO or OWL-ViT, followed by Non-Maximal Suppression (NMS) to filter overlapping boxes. It supports both single-image and batched processing.
+# Authors: L Meyers, Funcapalooza-Cicli2, 2025
+######################################################
 import sys
 import json
 import cv2
 import tqdm
 import torch
+import pandas as pd
+import yaml
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
@@ -20,11 +28,10 @@ from transformers import Owlv2Processor, Owlv2ForObjectDetection
 
 from bioclip import TreeOfLifeClassifier
 
-from sam_utils import *
-from visualize import *
-import pandas as pd
-import yaml
-import os
+sys.path.insert(0,"../")
+from utils.sam_utils import *
+from utils.visualize import *
+
 
 #########################################################################################3
 # Helper functions 
@@ -46,8 +53,8 @@ def owl_predict(image, text):
     model_id = "google/owlvit-base-patch32"
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    processor = Owlv2ImageProcessor.from_pretrained("google/owlv2-base-patch16-ensemble")
-    model = Owlv2ForObjectDetection.from_pretrained("google/owlv2-base-patch16-ensemble").to(torch.device)
+    processor = Owlv2Processor.from_pretrained("google/owlv2-base-patch16-ensemble")
+    model = Owlv2ForObjectDetection.from_pretrained("google/owlv2-base-patch16-ensemble").to(torch.device(device))
 
     # OWL-ViT expects a list of queries
     if isinstance(text, str):

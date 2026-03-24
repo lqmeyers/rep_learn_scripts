@@ -9,6 +9,8 @@ checkpoints/
 output/
 outputs/
 data/
+.env
+.vscode/
 __pycache__/
 
 
