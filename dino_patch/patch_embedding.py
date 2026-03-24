@@ -25,6 +25,7 @@ def load_dinov3_model(model_id="facebook/dinov3-vitb16-pretrain-lvd1689m",device
     """
     processor = AutoImageProcessor.from_pretrained("facebook/dinov3-vits16-pretrain-lvd1689m")
     model = AutoModel.from_pretrained(model_id, device_map="auto")
+    model.eval()
     return processor, model
 
 ###############################################################
