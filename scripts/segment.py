@@ -1,3 +1,4 @@
+from matplotlib import image
 import numpy as np
 from PIL import Image
 import sys
@@ -67,3 +68,61 @@ def batch_segmentation(image_paths, nms_boxes_batch, model_cfg, sam2_checkpoint,
         all_scores = np.stack(all_scores)
         all_logits = np.stack(all_logits)
     return all_masks, all_scores, all_logits
+
+def segment_single_image(image, points=None):
+    ## Run sam2 background removal
+
+
+    sam2_checkpoint = "/home/lmeyers/beefeeder_inference/samv2/sam2.1_hiera_large.pt"
+    model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
+
+    device= "cuda"
+    sam2_model = build_sam2(model_cfg, sam2_checkpoint, device=device)
+
+    predictor = SAM2ImagePredictor(sam2_model)
+    if points == None:
+        image_width, image_height = image.size
+        center_point = (image_width // 2, image_height // 2)
+        center_point = (center_point[0], center_point[1] - 100 )  # (x, y) format for SAM
+    else:
+        center_point = points
+    
+    predictor.set_image(image)
+    masks, scores, _ = predictor.predict(point_coords=[center_point], point_labels=[1], multimask_output=False)
+    
+    # Convert masks to binary and apply to the image
+    binary_mask = masks[0].astype(bool)
+    image_array = np.array(image)
+    background_removed_image = np.zeros_like(image_array)
+    background_removed_image[binary_mask] = image_array[binary_mask]
+    return background_removed_image
+
+def load_sam3_model():
+    from sam3.model_builder import build_sam3_image_model
+    from sam3.model.sam3_image_processor import Sam3Processor
+    # Load the model
+    model = build_sam3_image_model()
+    processor = Sam3Processor(model)
+    return model, processor
+
+def sam3_segment_single_image(image, predictor, points=None, text=None):
+    if points == None:
+        image_width, image_height = image.size
+        center_point = (image_width // 2, image_height // 2)
+        center_point = (center_point[0], center_point[1] - 100 )  # (x, y) format for SAM
+    else:
+        center_point = points
+    
+    inference_state = predictor.set_image(image)
+    # Prompt the model with text
+    output = predictor.set_text_prompt(state=inference_state, prompt=text)
+
+    # Get the masks, bounding boxes, and scores
+    masks, boxes, scores = output["masks"], output["boxes"], output["scores"]
+    
+    # Convert masks to binary and apply to the image
+    binary_mask = masks[0].astype(bool)
+    image_array = np.array(image)
+    background_removed_image = np.zeros_like(image_array)
+    background_removed_image[binary_mask] = image_array[binary_mask]
+    return background_removed_image
