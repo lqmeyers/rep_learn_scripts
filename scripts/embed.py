@@ -4,6 +4,7 @@ from transformers import AutoModel, AutoImageProcessor
 from bioclip import TreeOfLifeClassifier, Rank
 import numpy as np
 import pandas as pd
+import h5py
 import os
 import sys
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -54,6 +55,28 @@ def Dinov3_predict_batch(crops_batch):
             batch_embeddings.append(embedding)
         embeddings_batch.append(np.array(batch_embeddings))
     return embeddings_batch
+
+
+def save_patch_embedding_h5(out_path, patch_emb, cls_emb, grid_hw, meta):
+    """
+    Save one crop's DINOv3 patch embeddings + CLS token to its own .h5 file, in the
+    layout consumed by saev/scripts/h5_to_saev_shards.py.
+
+    Args:
+        out_path (str): Destination .h5 path.
+        patch_emb (np.ndarray): Patch embeddings of shape (num_patches, D), float32.
+        cls_emb (np.ndarray): CLS token of shape (D,), float32.
+        grid_hw (tuple): Patch grid (grid_h, grid_w) so num_patches == grid_h * grid_w.
+        meta (dict): Extra attributes to store (split, dataset_index, label, model_name...).
+    """
+    gh, gw = grid_hw
+    with h5py.File(out_path, "w") as f:
+        f.create_dataset("patch_embeddings", data=patch_emb, compression="gzip")
+        f.create_dataset("cls_embedding", data=cls_emb)
+        f.attrs["grid_h"] = gh
+        f.attrs["grid_w"] = gw
+        for k, v in meta.items():
+            f.attrs[k] = v
 
 
 ############################################ BioCLIP Embedding Function ############################################
