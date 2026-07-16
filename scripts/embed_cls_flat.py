@@ -11,19 +11,28 @@ output in exactly the layout saev/scripts/h5_to_saev_shards.py consumes:
         <split>/<split>_000001.h5
         ...
 
-One .h5 per image. `embedding_filepath` is relative to <out_dir>. The index
-CSV is flushed every --save-every batches for redundancy; the per-image h5s
-are written as they go, so a crash only loses the in-flight batch.
+One .h5 per image. Because gzip-compressing + writing thousands of little h5s
+is the bottleneck (not the GPU), saving is offloaded to a pool of background
+writer threads fed by a bounded queue: the main loop keeps DINOv3 batches
+flowing on the GPU while the writers drain the buffer to disk. The bounded
+queue also backpressures the GPU so we never pile up unbounded numpy arrays in
+RAM. h5py/zlib release the GIL during compression + IO, so threads overlap.
+
+The index CSV lists only files confirmed on disk and is flushed every
+--save-every batches for redundancy.
 
 Usage:
     python embed_cls_flat.py --input imgs.csv --out-dir /path/to/out
     python embed_cls_flat.py --input imgs.csv --image-col crop_path \\
-        --split-col split --label-col label --batch-size 16
+        --split-col split --label-col label --batch-size 16 \\
+        --writer-threads 6 --buffer 128
 """
 
 import argparse
 import os
+import queue
 import sys
+import threading
 
 import h5py
 import numpy as np
@@ -40,6 +49,16 @@ from dino_patch.patch_embedding import (
 
 IMAGE_SIZE = 752  # 47 * 16, so patches divide evenly for patch_size=16
 
+INDEX_COLUMNS = [
+    "split",
+    "dataset_index",
+    "label",
+    "grid_h",
+    "grid_w",
+    "embedding_filepath",
+    "image_path",
+]
+
 
 def save_patch_embedding_h5(out_path, patch_emb, cls_emb, grid_hw, meta):
     """Save one image's patch + CLS embeddings in the saev-shard input layout."""
@@ -51,6 +70,68 @@ def save_patch_embedding_h5(out_path, patch_emb, cls_emb, grid_hw, meta):
         f.attrs["grid_w"] = gw
         for k, v in meta.items():
             f.attrs[k] = v
+
+
+class H5WriterPool:
+    """Background thread pool that writes per-image h5s from a bounded queue.
+
+    Producers call `submit(job)`; workers write the file and record the job's
+    index row (only after a successful write) so the CSV reflects on-disk state.
+    """
+
+    def __init__(self, out_dir, n_threads, buffer):
+        self.out_dir = out_dir
+        self.q = queue.Queue(maxsize=buffer)
+        self._done_rows = []
+        self._lock = threading.Lock()
+        self._error = None
+        self.threads = [
+            threading.Thread(target=self._worker, daemon=True) for _ in range(n_threads)
+        ]
+        for t in self.threads:
+            t.start()
+
+    def _worker(self):
+        while True:
+            job = self.q.get()
+            if job is None:
+                self.q.task_done()
+                return
+            try:
+                if self._error is None:  # skip remaining work once something failed
+                    rel, patch_emb, cls_emb, grid_hw, meta, row = job
+                    save_patch_embedding_h5(
+                        os.path.join(self.out_dir, rel), patch_emb, cls_emb, grid_hw, meta
+                    )
+                    with self._lock:
+                        self._done_rows.append(row)
+            except Exception as e:  # surface writer failures to the main thread
+                with self._lock:
+                    if self._error is None:
+                        self._error = e
+            finally:
+                self.q.task_done()
+
+    def submit(self, job):
+        # Re-raise a writer error on the producer side (backpressure point).
+        if self._error is not None:
+            raise self._error
+        self.q.put(job)  # blocks when the buffer is full -> throttles the GPU
+
+    def completed_rows(self):
+        with self._lock:
+            return list(self._done_rows)
+
+    def raise_if_error(self):
+        if self._error is not None:
+            raise self._error
+
+    def close(self):
+        for _ in self.threads:
+            self.q.put(None)
+        for t in self.threads:
+            t.join()
+        self.raise_if_error()
 
 
 def main():
@@ -80,6 +161,18 @@ def main():
         type=int,
         default=10,
         help="Flush the index csv every N batches for redundancy.",
+    )
+    ap.add_argument(
+        "--writer-threads",
+        type=int,
+        default=6,
+        help="Background threads writing h5s in parallel with GPU batches.",
+    )
+    ap.add_argument(
+        "--buffer",
+        type=int,
+        default=128,
+        help="Max pending images in the writer queue (backpressures the GPU).",
     )
     ap.add_argument("--device", default="cuda")
     args = ap.parse_args()
@@ -115,65 +208,53 @@ def main():
         f"IMAGE_SIZE {IMAGE_SIZE} not divisible by patch_size {patch_size}"
     )
 
-    # per-split running counter for dataset_index and h5 filenames
-    split_counts = {}
-    index_rows = []
+    # Pre-create split subdirs so writer threads never race on os.makedirs.
+    for sp in set(splits):
+        os.makedirs(os.path.join(args.out_dir, sp), exist_ok=True)
+
+    pool = H5WriterPool(args.out_dir, args.writer_threads, args.buffer)
+    split_counts = {}  # per-split running counter, assigned in the main thread
 
     def flush():
-        pd.DataFrame(
-            index_rows,
-            columns=[
-                "split",
-                "dataset_index",
-                "label",
-                "grid_h",
-                "grid_w",
-                "embedding_filepath",
-                "image_path",
-            ],
-        ).to_csv(index_path, index=False)
+        rows = pool.completed_rows()
+        pd.DataFrame(rows, columns=INDEX_COLUMNS).to_csv(index_path, index=False)
 
-    n_batches = (n + args.batch_size - 1) // args.batch_size
-    for bi in tqdm.tqdm(range(n_batches), desc="Embedding"):
-        sl = slice(bi * args.batch_size, (bi + 1) * args.batch_size)
-        b_paths, b_splits, b_labels = paths[sl], splits[sl], labels[sl]
+    try:
+        n_batches = (n + args.batch_size - 1) // args.batch_size
+        for bi in tqdm.tqdm(range(n_batches), desc="Embedding"):
+            pool.raise_if_error()
+            sl = slice(bi * args.batch_size, (bi + 1) * args.batch_size)
+            b_paths, b_splits, b_labels = paths[sl], splits[sl], labels[sl]
 
-        images, meta = [], []
-        for p, sp, lab in zip(b_paths, b_splits, b_labels):
-            try:
-                img = Image.open(p).convert("RGB").resize((IMAGE_SIZE, IMAGE_SIZE))
-            except Exception as e:
-                print(f"Skipping {p}: {e}")
+            images, meta = [], []
+            for p, sp, lab in zip(b_paths, b_splits, b_labels):
+                try:
+                    img = Image.open(p).convert("RGB").resize((IMAGE_SIZE, IMAGE_SIZE))
+                except Exception as e:
+                    print(f"Skipping {p}: {e}")
+                    continue
+                images.append(img)
+                meta.append((p, sp, lab))
+            if not images:
                 continue
-            images.append(img)
-            meta.append((p, sp, lab))
-        if not images:
-            continue
 
-        cls_tokens, patches = get_dinov3_class_patch_embeddings_batch(
-            images, processor, model, device=args.device
-        )
-        cls_np = cls_tokens.cpu().float().numpy()
-        patch_np = patches.cpu().float().numpy()
-
-        num_patches = patch_np.shape[1]
-        grid = int(round(num_patches**0.5))
-        assert grid * grid == num_patches, f"non-square patch grid: {num_patches}"
-
-        for i, (p, sp, lab) in enumerate(meta):
-            idx = split_counts.get(sp, 0)
-            split_counts[sp] = idx + 1
-            os.makedirs(os.path.join(args.out_dir, sp), exist_ok=True)
-            rel = os.path.join(sp, f"{sp}_{idx:06d}.h5")
-            save_patch_embedding_h5(
-                os.path.join(args.out_dir, rel),
-                patch_np[i],
-                cls_np[i],
-                (grid, grid),
-                {"split": sp, "dataset_index": idx, "label": lab, "model_id": args.model_id},
+            cls_tokens, patches = get_dinov3_class_patch_embeddings_batch(
+                images, processor, model, device=args.device
             )
-            index_rows.append(
-                {
+            cls_np = cls_tokens.cpu().float().numpy()
+            patch_np = patches.cpu().float().numpy()
+
+            num_patches = patch_np.shape[1]
+            grid = int(round(num_patches**0.5))
+            assert grid * grid == num_patches, f"non-square patch grid: {num_patches}"
+
+            # Copy each row out of the batch arrays so the writer owns its own
+            # contiguous buffer (the batch arrays are freed next iteration).
+            for i, (p, sp, lab) in enumerate(meta):
+                idx = split_counts.get(sp, 0)
+                split_counts[sp] = idx + 1
+                rel = os.path.join(sp, f"{sp}_{idx:06d}.h5")
+                row = {
                     "split": sp,
                     "dataset_index": idx,
                     "label": lab,
@@ -182,14 +263,24 @@ def main():
                     "embedding_filepath": rel,
                     "image_path": p,
                 }
-            )
+                job = (
+                    rel,
+                    np.ascontiguousarray(patch_np[i]),
+                    np.ascontiguousarray(cls_np[i]),
+                    (grid, grid),
+                    {"split": sp, "dataset_index": idx, "label": lab, "model_id": args.model_id},
+                    row,
+                )
+                pool.submit(job)  # blocks if the disk falls behind
 
-        if (bi + 1) % args.save_every == 0:
-            flush()
+            if (bi + 1) % args.save_every == 0:
+                flush()
+    finally:
+        pool.close()  # drain the queue, join writers, re-raise any writer error
+        flush()
 
-    flush()
     print(
-        f"Done. Wrote {len(index_rows)} embeddings across splits {dict(split_counts)}.\n"
+        f"Done. Wrote {len(pool.completed_rows())} embeddings across splits {dict(split_counts)}.\n"
         f"  index: {index_path}\n"
         f"Feed --embeddings-dir {args.out_dir} to h5_to_saev_shards.py"
     )
