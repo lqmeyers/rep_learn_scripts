@@ -12,6 +12,7 @@
 #########################################
 
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "1,2"
 import pandas as pd
 import yaml
 from PIL import Image
@@ -243,7 +244,7 @@ def process_csv_with_pipeline(
                     "dino_patch_model_id", "facebook/dinov3-vit7b16-pretrain-lvd1689m"
                 ),
                 input_size=input_size,
-                batch_size=int(config.get("shard_embed_batch_size", 8)),
+                batch_size=int(config.get("shard_embed_batch_size", 16)),
             )
             save_saev_h5_from_embeddings(
                 cls_batch,
@@ -292,9 +293,9 @@ def process_csv_with_pipeline(
                 print(
                     f"Skipping detection and segmentation, using full images for {len(image_paths)} images..."
                 )
-            crops_batch = [
-                [Image.open(img_path).convert("RGB")] for img_path in image_paths
-            ]
+            crops_batch = []
+            for img_path in tqdm.tqdm(image_paths, "Opening Images"):
+                crops_batch.append(Image.open(img_path).convert("RGB")) 
 
         # Embedding selection. DINOv3 returns CLS + patches in one pass so the saev h5
         # export below can reuse them instead of recomputing.
@@ -312,7 +313,7 @@ def process_csv_with_pipeline(
             cls_batch, patch_batch = dinov3_class_patch_embed_batch(
                 crops_batch,
                 model_id=config.get(
-                    "dino_patch_model_id", "facebook/dinov3-vit7b16-pretrain-lvd1689m"
+                    "dino_patch_model_id", "facebook/dinov3-vitl16-pretrain-lvd1689m"
                 ),
                 input_size=input_size,
                 batch_size=int(config.get("shard_embed_batch_size", 8)),

@@ -97,27 +97,12 @@ def dinov3_class_patch_embed_batch(
         )
 
     cls_batch, patch_batch = [], []
-    for crops in tqdm.tqdm(
-        crops_batch, total=len(crops_batch), desc="Embedding crops with DINOv3"
+    for i in tqdm.tqdm(range(0, len(crops), batch_size), total=len(crops_batch), desc="Embedding crops with DINOv3"
     ):
-        prepped = []
-        for crop in crops:
-            if crop.mode != "RGB":
-                crop = crop.convert("RGB")
-            if input_size is not None:
-                crop = crop.resize((input_size, input_size))
-            prepped.append(crop)
-        if not prepped:
-            cls_batch.append(np.empty((0,), dtype=np.float32))
-            patch_batch.append(np.empty((0,), dtype=np.float32))
-            continue
         cls_chunks, patch_chunks = [], []
-        for i in range(0, len(prepped), batch_size):
-            cls_tokens, patches = get_dinov3_class_patch_embeddings_batch(
-                prepped[i : i + batch_size], processor, model, device=device
-            )
-            cls_chunks.append(cls_tokens.cpu().float().numpy())
-            patch_chunks.append(patches.cpu().float().numpy())
+        cls_tokens, patches = get_dinov3_class_patch_embeddings_batch(crops_batch[i : i + batch_size], processor, model, device=device)
+        cls_chunks.append(cls_tokens.cpu().float().numpy())
+        patch_chunks.append(patches.cpu().float().numpy())
         cls_batch.append(np.concatenate(cls_chunks, axis=0))
         patch_batch.append(np.concatenate(patch_chunks, axis=0))
     return cls_batch, patch_batch

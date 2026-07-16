@@ -1,5 +1,5 @@
-filepath_col: "file_name"  # column name for image paths
-detection: True  # Whether to perform object detection
+filepath_col: "whole_bee_mask_filepath"  # column name for image paths
+detection: False  # Whether to perform object detection
 detection_model: #"IDEA-Research/grounding-dino-tiny"
 coco_json_path:   # Path to COCO JSON file (default: output_dir/nms_boxes_{idx}.json)
 text_prompt: "bird."  # Optional text prompt for processing
@@ -7,11 +7,11 @@ segmentation: False  # Whether to perform segmentation
 sam2_checkpoint: "./checkpoints/sam2.1_hiera_large.pt" # Path to the SAM2 model checkpoint
 sam2_model_cfg: "configs/sam2.1/sam2.1_hiera_l.yaml"  # Path to the model configuration file
 device: cuda  # Device to run the model on (e.g., "cuda", "cpu")
-embed: False  # Whether to compute embeddings
-embedding_model: ""  # Embedding model to use
-batch_size: 4  # Batch size for processing
+embed: True  # Whether to compute embeddings
+embedding_model: "DINOv3"  # Embedding model to use
+batch_size: 16  # Batch size for processing
 visualize: False # Whether to visualize results
-output_dir: "/users/PAS2136/lqmeyers/rep_learn_scripts/output/detection_test"  # Directory to save output files
-save_images: True  # Whether to save processed images
-output_csv: "/users/PAS2136/lqmeyers/rep_learn_scripts/output/detection_test/results.csv"  # Path to save the output CSV file
+output_dir: "/home/lmeyers/rep_learn_scripts/output/DINOpatches/"  # Directory to save output files
+save_images: False # Whether to save processed images
+output_csv: "/home/lmeyers/rep_learn_scripts/output/DINOpatches/results.csv"  # Path to save the output CSV file
   
