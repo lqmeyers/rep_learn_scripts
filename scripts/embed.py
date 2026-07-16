@@ -7,12 +7,14 @@ import pandas as pd
 import h5py
 import os
 import sys
+
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import matplotlib.pyplot as plt
 import torch
 
 sys.path.insert(0, "../")
 from dino_patch.patch_embedding import *
+
 
 ############################################################ Main Embedding Functions ########################################################
 def bioclip_embed_batch(crops_batch, classifier=None):
@@ -37,24 +39,88 @@ def bioclip_embed_batch(crops_batch, classifier=None):
         embeddings_batch.append(np.array(embeddings))
     return embeddings_batch
 
+
 ####################3
 def Dinov3_predict_batch(crops_batch):
-     
-    preprocessor, model = load_dinov3_model("facebook/dinov3-vit7b16-pretrain-lvd1689m", device='cuda')
+
+    preprocessor, model = load_dinov3_model(
+        "facebook/dinov3-vit7b16-pretrain-lvd1689m", device="cuda"
+    )
 
     embeddings_batch = []
-    for crops in tqdm.tqdm(crops_batch, desc="Embedding crops with DINOv3", total=len(crops_batch)):
+    for crops in tqdm.tqdm(
+        crops_batch, desc="Embedding crops with DINOv3", total=len(crops_batch)
+    ):
         batch_embeddings = []
         for crop in crops:
             if crop.mode == "RGBA":
                 crop = crop.convert("RGB")
-            inputs = preprocessor(crop, return_tensors="pt").to('cuda')
+            inputs = preprocessor(crop, return_tensors="pt").to("cuda")
             with torch.no_grad():
                 outputs = model(**inputs)
             embedding = outputs.last_hidden_state[:, 0, :].cpu().numpy().squeeze()
             batch_embeddings.append(embedding)
         embeddings_batch.append(np.array(batch_embeddings))
     return embeddings_batch
+
+
+def dinov3_class_patch_embed_batch(
+    crops_batch,
+    model_id="facebook/dinov3-vit7b16-pretrain-lvd1689m",
+    input_size=None,
+    batch_size=8,
+    device="cuda",
+):
+    """
+    Embed grouped crops with DINOv3, returning CLS and patch embeddings aligned with crops_batch.
+
+    Loads the model once (unlike calling the low-level helper repeatedly). When input_size is given, every crop is resized to (input_size, input_size) so all crops share one patch grid, which the saev shard export requires. input_size is snapped down to a multiple of the model's patch size.
+
+    Args:
+        crops_batch (list of list of PIL.Image): One inner list of crops per input row.
+        model_id (str): DINOv3 checkpoint id.
+        input_size (int | None): Square side to resize every crop to, or None to leave crops as-is.
+        batch_size (int): Forward-pass mini-batch size.
+        device (str): torch device.
+
+    Returns:
+        cls_batch (list of np.ndarray): Per row, (n_crops, D) float32 CLS embeddings.
+        patch_batch (list of np.ndarray): Per row, (n_crops, N, D) float32 patch embeddings.
+    """
+    processor, model = load_dinov3_model(model_id, device=device)
+
+    if input_size is not None:
+        patch_size = getattr(model.config, "patch_size", 16)
+        input_size = (input_size // patch_size) * patch_size
+        assert input_size >= patch_size, (
+            f"input_size too small for patch_size {patch_size}."
+        )
+
+    cls_batch, patch_batch = [], []
+    for crops in tqdm.tqdm(
+        crops_batch, total=len(crops_batch), desc="Embedding crops with DINOv3"
+    ):
+        prepped = []
+        for crop in crops:
+            if crop.mode != "RGB":
+                crop = crop.convert("RGB")
+            if input_size is not None:
+                crop = crop.resize((input_size, input_size))
+            prepped.append(crop)
+        if not prepped:
+            cls_batch.append(np.empty((0,), dtype=np.float32))
+            patch_batch.append(np.empty((0,), dtype=np.float32))
+            continue
+        cls_chunks, patch_chunks = [], []
+        for i in range(0, len(prepped), batch_size):
+            cls_tokens, patches = get_dinov3_class_patch_embeddings_batch(
+                prepped[i : i + batch_size], processor, model, device=device
+            )
+            cls_chunks.append(cls_tokens.cpu().float().numpy())
+            patch_chunks.append(patches.cpu().float().numpy())
+        cls_batch.append(np.concatenate(cls_chunks, axis=0))
+        patch_batch.append(np.concatenate(patch_chunks, axis=0))
+    return cls_batch, patch_batch
 
 
 def save_patch_embedding_h5(out_path, patch_emb, cls_emb, grid_hw, meta):
@@ -105,7 +171,13 @@ def bioclip_embed(crops, classifier=None):
     return np.array(embeddings)
 
 
-def bioclip_embed_batch_from_df(df, image_path_col="local_path", classifier=None, batch_size=32, embedding_col="embedding"):
+def bioclip_embed_batch_from_df(
+    df,
+    image_path_col="local_path",
+    classifier=None,
+    batch_size=32,
+    embedding_col="embedding",
+):
     """
     Batch embed images using BioCLIP and add embeddings as a list to the dataframe.
 
@@ -127,12 +199,16 @@ def bioclip_embed_batch_from_df(df, image_path_col="local_path", classifier=None
     predictions = []
     df.drop_duplicates()
     paths = df[image_path_col].tolist()
-    for i in tqdm.tqdm(range(0, len(paths), batch_size),total=len(paths)//batch_size):
-        batch_paths = paths[i:i+batch_size]
+    for i in tqdm.tqdm(
+        range(0, len(paths), batch_size), total=len(paths) // batch_size
+    ):
+        batch_paths = paths[i : i + batch_size]
         batch_images = [Image.open(p).convert("RGB") for p in batch_paths]
 
         batch_emb = classifier.create_image_features(batch_images).cpu().numpy()
-        batch_preds = classifier.predict(batch_images,Rank.SPECIES,k=1,batch_size=batch_size)
+        batch_preds = classifier.predict(
+            batch_images, Rank.SPECIES, k=1, batch_size=batch_size
+        )
         # Update 'file_name' in batch_preds to actual image paths
         for idx, pred in enumerate(batch_preds):
             pred["file_name"] = batch_paths[idx]
@@ -141,56 +217,75 @@ def bioclip_embed_batch_from_df(df, image_path_col="local_path", classifier=None
         predictions.extend(batch_preds)
         embeddings.extend(batch_emb.tolist())
 
-
     pred_df = pd.DataFrame(predictions)
-    pred_df.rename(columns={"score": "class_score"}, inplace=True)  
-    
+    pred_df.rename(columns={"score": "class_score"}, inplace=True)
+
     # Fix col name
     df.rename(columns={"score": "detection_score"}, inplace=True)
-    cols_to_delete = [col for col in pred_df.columns if col in df.columns and col != "file_name"]
+    cols_to_delete = [
+        col for col in pred_df.columns if col in df.columns and col != "file_name"
+    ]
     df.drop(cols_to_delete, axis=1, inplace=True)
 
-    df = df.merge(pred_df,left_on=image_path_col,right_on="file_name",how="left")
-    
+    df = df.merge(pred_df, left_on=image_path_col, right_on="file_name", how="left")
+
     emb_save_path = os.path.splitext(df_path)[0] + "_embeddings.pth"
     torch.save(torch.tensor(embeddings), emb_save_path)
 
-   
     df = df[~df[image_path_col].isna()]
 
     # if len(embeddings) == len(df):
     #     df[embedding_col] = embeddings
     # Add detection metadata
-    df["has_y_edge"] = df.apply(lambda row: (row["y_min"] <= 5) | (row["y_max"] >= 1075),axis=1)
-    df["horizontal_detection"] = df.apply(lambda row: (row["x_max"] - row["x_min"]) > (row["y_max"] - row["y_min"]),axis=1)
-    df["has_x_edge"] = df.apply(lambda row: (row["x_min"] <= 5) | (row["x_max"] >= 1915),axis=1)
-    df["near_edge"] = ((~df["has_x_edge"]) & (~df["horizontal_detection"])) | ((~df["has_y_edge"]) & (df["horizontal_detection"]))
+    df["has_y_edge"] = df.apply(
+        lambda row: (row["y_min"] <= 5) | (row["y_max"] >= 1075), axis=1
+    )
+    df["horizontal_detection"] = df.apply(
+        lambda row: (row["x_max"] - row["x_min"]) > (row["y_max"] - row["y_min"]),
+        axis=1,
+    )
+    df["has_x_edge"] = df.apply(
+        lambda row: (row["x_min"] <= 5) | (row["x_max"] >= 1915), axis=1
+    )
+    df["near_edge"] = ((~df["has_x_edge"]) & (~df["horizontal_detection"])) | (
+        (~df["has_y_edge"]) & (df["horizontal_detection"])
+    )
 
     return df
 
+
 #############################
 # Dino inference
-def dinov3_embed_from_df(df, image_path_col="crop_path", model_name="facebook/dinov3-vit7b16-pretrain-lvd1689", batch_size=32, embedding_col="embedding",limited_mem=False):
-   
+def dinov3_embed_from_df(
+    df,
+    image_path_col="crop_path",
+    model_name="facebook/dinov3-vit7b16-pretrain-lvd1689",
+    batch_size=32,
+    embedding_col="embedding",
+    limited_mem=False,
+):
+
     # Check GPU
     print("CUDA available:", torch.cuda.is_available())
     num_devices = torch.cuda.device_count()
     print("Number of CUDA devices:", num_devices)
     for idx in range(num_devices):
         print(f"Device {idx}: {torch.cuda.get_device_name(idx)}")
-    
-    preprocessor, model = load_dinov3_model("facebook/dinov3-vit7b16-pretrain-lvd1689m", device='cuda')
+
+    preprocessor, model = load_dinov3_model(
+        "facebook/dinov3-vit7b16-pretrain-lvd1689m", device="cuda"
+    )
 
     # Prepare paths and output arrays
     paths = df[image_path_col].tolist()
     n_samples = len(paths)
-    embedding_dim = model.config.hidden_size if hasattr(model.config, "hidden_size") else 768
+    embedding_dim = (
+        model.config.hidden_size if hasattr(model.config, "hidden_size") else 768
+    )
 
-   
-   
     # Preallocate arrays for embeddings
     embeddings = []
-   
+
     # Batch inference
     for i in tqdm.tqdm(range(0, n_samples, batch_size), desc="Processing batches"):
         batch_idx = slice(i, min(i + batch_size, n_samples))
@@ -202,22 +297,26 @@ def dinov3_embed_from_df(df, image_path_col="crop_path", model_name="facebook/di
             except Exception as e:
                 print(f"Error loading {path}: {e}")
                 images.append(Image.new("RGB", input_size))
-        inputs = processor(images=images, return_tensors="pt", size=list(input_size)).to(model.device)
+        inputs = processor(
+            images=images, return_tensors="pt", size=list(input_size)
+        ).to(model.device)
         with torch.inference_mode():
             outputs = model(**inputs)
-        batch_embeddings = outputs.pooler_output.cpu().numpy()    
+        batch_embeddings = outputs.pooler_output.cpu().numpy()
         embeddings.extend(batch_embeddings.tolist())
         torch.cuda.empty_cache()
-    
+
     df[embedding_col] = embeddings
     return df
-
 
 
 if __name__ == "__main__":
     # Usage example:
     df_path = "/home/lmeyers/GH010037/detections.csv"
     dfm = pd.read_csv(df_path)
-    dfcm = bioclip_embed_batch_from_df(dfm, image_path_col="crop_path",batch_size=64)
-    outpath = os.path.join(os.path.dirname(df_path),os.path.basename(df_path)[:-4] + "_with_all_embeddings.csv")
+    dfcm = bioclip_embed_batch_from_df(dfm, image_path_col="crop_path", batch_size=64)
+    outpath = os.path.join(
+        os.path.dirname(df_path),
+        os.path.basename(df_path)[:-4] + "_with_all_embeddings.csv",
+    )
     dfcm.to_csv(outpath, index=False)
