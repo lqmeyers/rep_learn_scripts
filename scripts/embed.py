@@ -96,15 +96,45 @@ def dinov3_class_patch_embed_batch(
             f"input_size too small for patch_size {patch_size}."
         )
 
-    cls_batch, patch_batch = [], []
-    for i in tqdm.tqdm(range(0, len(crops), batch_size), total=len(crops_batch), desc="Embedding crops with DINOv3"
+    # Flatten crops across rows so the GPU forward pass sees uniform mini-batches,
+    # remembering how many crops belong to each row so we can regroup afterwards.
+    flat_crops, counts = [], []
+    for crops in crops_batch:
+        counts.append(len(crops))
+        for crop in crops:
+            if crop.mode == "RGBA":
+                crop = crop.convert("RGB")
+            if input_size is not None:
+                crop = crop.resize((input_size, input_size))
+            flat_crops.append(crop)
+
+    cls_chunks, patch_chunks = [], []
+    for i in tqdm.tqdm(
+        range(0, len(flat_crops), batch_size),
+        desc="Embedding crops with DINOv3",
     ):
-        cls_chunks, patch_chunks = [], []
-        cls_tokens, patches = get_dinov3_class_patch_embeddings_batch(crops_batch[i : i + batch_size], processor, model, device=device)
+        cls_tokens, patches = get_dinov3_class_patch_embeddings_batch(
+            flat_crops[i : i + batch_size], processor, model, device=device
+        )
         cls_chunks.append(cls_tokens.cpu().float().numpy())
         patch_chunks.append(patches.cpu().float().numpy())
-        cls_batch.append(np.concatenate(cls_chunks, axis=0))
-        patch_batch.append(np.concatenate(patch_chunks, axis=0))
+
+    cls_all = (
+        np.concatenate(cls_chunks, axis=0) if cls_chunks else np.empty((0, 0), np.float32)
+    )
+    patch_all = (
+        np.concatenate(patch_chunks, axis=0)
+        if patch_chunks
+        else np.empty((0, 0, 0), np.float32)
+    )
+
+    # Regroup the flat embeddings back into one (n_crops, ...) array per input row.
+    cls_batch, patch_batch = [], []
+    start = 0
+    for n in counts:
+        cls_batch.append(cls_all[start : start + n])
+        patch_batch.append(patch_all[start : start + n])
+        start += n
     return cls_batch, patch_batch
 
 

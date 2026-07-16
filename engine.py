@@ -293,9 +293,11 @@ def process_csv_with_pipeline(
                 print(
                     f"Skipping detection and segmentation, using full images for {len(image_paths)} images..."
                 )
+            # Keep the list-of-lists shape every downstream consumer expects:
+            # one inner list of crops per row (here a single full image).
             crops_batch = []
             for img_path in tqdm.tqdm(image_paths, "Opening Images"):
-                crops_batch.append(Image.open(img_path).convert("RGB")) 
+                crops_batch.append([Image.open(img_path).convert("RGB")])
 
         # Embedding selection. DINOv3 returns CLS + patches in one pass so the saev h5
         # export below can reuse them instead of recomputing.
